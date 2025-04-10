@@ -414,8 +414,8 @@ app.delete("/api/recipes/:id", async (req, res) => {
 });
 
 // --- Démarrage du serveur ---
-app.listen(port, () => {
-  console.log(`Backend Recipe API listening at http://localhost:${port}`);
-  console.log(`Serving recipes from: ${recipesBasePath}`);
-  console.log(`Serving uploaded images from: ${uploadsBasePath} via /uploads`); // Log pour les images
+// En bas de server.js
+const PORT = process.env.PORT || 3000; // Utilise le port de l'env ou 3000 par défaut
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
 });

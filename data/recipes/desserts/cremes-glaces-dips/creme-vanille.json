@@ -1,0 +1,27 @@
+{
+  "id": "creme-vanille",
+  "title": "Crème à la vanille",
+  "description": "Une crème douce et parfumée, parfaite pour le dessert.",
+  "category": "desserts",
+  "subcategory": "cremes-glaces-et-dips",
+  "prepTime": 15,
+  "cookTime": 20,
+  "servings": 4,
+  "difficulty": "Facile",
+  "tags": ["dessert", "vanille"],
+  "ingredients": [
+    "50cl de lait",
+    "1 gousse de vanille",
+    "4 jaunes d'œufs",
+    "100g de sucre",
+    "20g de maïzena"
+  ],
+  "steps": [
+    "Fendre la gousse de vanille, gratter les graines.",
+    "Faire chauffer le lait avec la vanille.",
+    "Battre les jaunes avec le sucre et la maïzena.",
+    "Verser le lait chaud dessus, mélanger, puis recuire à feu doux.",
+    "Répartir dans des ramequins et laisser refroidir."
+  ],
+  "imageUrl": "assets/images/creme-vanille.jpg"
+}

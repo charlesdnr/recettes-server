@@ -1,0 +1,38 @@
+{
+    "id": "gratin-dauphinois",
+    "title": "Gratin Dauphinois",
+    "description": "Un classique de la cuisine française, ce gratin de pommes de terre est onctueux et réconfortant. Idéal pour accompagner viandes et poissons, il se déguste aussi bien en hiver qu'en été.",
+    "prepTime": 20,
+    "cookTime": 60,
+    "servings": 6,
+    "difficulty": "Facile",
+    "ingredients": [
+        "1 kg de pommes de terre (type Charlotte)",
+        "30 cl de crème fraîche épaisse",
+        "20 cl de lait entier",
+        "2 gousses d'ail",
+        "1 noix de beurre",
+        "Sel et poivre",
+        "Noix de muscade"
+    ],
+    "steps": [
+        "Préchauffer le four à 180°C (thermostat 6).",
+        "Éplucher les pommes de terre et les laver soigneusement.",
+        "Trancher finement les pommes de terre (2-3 mm d'épaisseur) à l'aide d'une mandoline ou d'un couteau bien aiguisé.",
+        "Frotter un plat à gratin avec une gousse d'ail épluchée et coupée en deux, puis le beurrer généreusement.",
+        "Dans une casserole, faire chauffer le lait et la crème. Ajouter l'ail écrasé, le sel, le poivre et une pincée de muscade râpée.",
+        "Disposer les tranches de pommes de terre dans le plat en les faisant légèrement se chevaucher.",
+        "Verser le mélange lait-crème sur les pommes de terre. Le liquide doit presque les recouvrir.",
+        "Enfourner pour environ 1 heure, jusqu'à ce que les pommes de terre soient tendres et que le dessus soit bien doré.",
+        "Laisser reposer 10 minutes avant de servir."
+    ],
+    "imageUrl": "assets/images/gratin-dauphinois.jpg",
+    "tags": [
+        "pommes de terre",
+        "gratin",
+        "crémeux",
+        "plat traditionnel"
+    ],
+    "category": "Plats principaux",
+    "subcategory": "plats a base de legumes et pommes de terre"
+}

@@ -1,0 +1,10 @@
+[
+  {
+    "id": "tartare-saumon",
+    "title": "Tartare de saumon",
+    "description": "Entrée fraîche et raffinée à base de saumon cru.",
+    "imageUrl": "assets/images/tartare-saumon.jpg",
+    "tags": ["frais", "poisson cru"],
+    "difficulty": "Moyen"
+  }
+]

@@ -1,0 +1,10 @@
+[
+  {
+    "id": "pates-carbonara",
+    "title": "Pâtes à la carbonara",
+    "description": "Un grand classique italien, sans crème.",
+    "imageUrl": "assets/images/pates-carbonara.jpg",
+    "tags": ["italien", "rapide"],
+    "difficulty": "Facile"
+  }
+]

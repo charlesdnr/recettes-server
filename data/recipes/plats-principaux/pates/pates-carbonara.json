@@ -1,0 +1,30 @@
+{
+  "title": "Pâtes à la carbonara",
+  "description": "Un grand classique italien, sans crème.",
+  "category": "plats-principaux",
+  "subcategory": "pates",
+  "prepTime": 10,
+  "cookTime": 15,
+  "servings": 2,
+  "difficulty": "Facile",
+  "ingredients": [
+    "200g de spaghetti",
+    "100g de pancetta",
+    "2 jaunes d’œufs",
+    "30g de parmesan",
+    "Sel, poivre"
+  ],
+  "steps": [
+    "Faire cuire les pâtes.",
+    "Faire revenir la pancetta.",
+    "Mélanger les jaunes d’œufs avec le parmesan.",
+    "Égoutter les pâtes, ajouter la pancetta, puis les œufs hors du feu.",
+    "Servir immédiatement."
+  ],
+  "imageUrl": "/uploads/images/f655e196-0f8b-4d16-b9f0-e88fa708e576.png",
+  "tags": [
+    "italien",
+    "rapide"
+  ],
+  "id": "pates-carbonara"
+}

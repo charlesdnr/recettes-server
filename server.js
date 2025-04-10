@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -11,17 +13,23 @@ const admin = require("firebase-admin");
 // FieldValue pour les opérations atomiques (timestamps, arrayUnion, etc.)
 const { FieldValue } = require("firebase-admin/firestore");
 
-// ========================================================================
-// ACTION REQUISE : Mettez le chemin correct vers votre clé Firebase ici !
-const serviceAccountPath = '/etc/secrets/service-account-key.json';
+// --- Chargement de la clé via variable d'environnement ---
+const serviceAccountPath = process.env.FIREBASE_KEY_PATH;
+if (!serviceAccountPath) {
+    console.error('FATAL ERROR: FIREBASE_KEY_PATH environment variable is not set.');
+    process.exit(1); // Arrêter si la variable n'est pas définie
+}
 let serviceAccount;
 try {
+    // Charger le fichier depuis le chemin spécifié par la variable d'environnement
     serviceAccount = require(serviceAccountPath);
+    console.log(`Successfully loaded Firebase service account key from: ${serviceAccountPath}`);
 } catch(e) {
-    console.error(`FATAL ERROR: Could not load Firebase secret file from ${serviceAccountPath}. Ensure the Secret File is configured correctly in Render and the path matches.`);
+    console.error(`FATAL ERROR: Could not load Firebase secret file from path specified in FIREBASE_KEY_PATH: ${serviceAccountPath}`);
     console.error(e);
-    process.exit(1); // Arrêter si la clé ne peut pas être chargée
+    process.exit(1);
 }
+// --- Fin Chargement Clé ---
 
 // ACTION REQUISE : Mettez le nom de votre bucket Storage Firebase ici !
 const firebaseStorageBucket = "recettes-63044.appspot.com";

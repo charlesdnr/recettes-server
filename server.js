@@ -1,421 +1,403 @@
-// recipe-backend/server.js
 const express = require("express");
 const cors = require("cors");
-const fs = require("fs/promises"); // Utilisation de l'API 'fs' basée sur les promesses
 const path = require("path");
 const multer = require("multer");
 const { v4: uuidv4 } = require("uuid"); // Pour générer des IDs uniques
 
 const app = express();
-const port = 3000; // Port sur lequel le backend écoutera
 
-// --- Configuration ---
-// Chemin vers le dossier contenant les recettes (data/recipes)
-const recipesBasePath = path.join(__dirname, "data", "recipes");
-const uploadsBasePath = path.join(__dirname, "data", "uploads"); // <-- Chemin base uploads
-const imagesUploadPath = path.join(uploadsBasePath, "images");
+// --- Initialisation de Firebase Admin ---
+const admin = require("firebase-admin");
+// FieldValue pour les opérations atomiques (timestamps, arrayUnion, etc.)
+const { FieldValue } = require("firebase-admin/firestore");
 
-// Dans recipe-backend/server.js
-
-// --- Configuration de Multer ---
-const imageStorage = multer.diskStorage({
-    destination: async (req, file, cb) => {
-      // ... (la partie destination est probablement correcte) ...
-      try {
-        await fs.mkdir(imagesUploadPath, { recursive: true });
-        cb(null, imagesUploadPath);
-      } catch (err) {
-        console.error("Multer: Impossible de créer le dossier:", err);
-        cb(err, null);
-      }
-    },
-    // == CORRECTION ICI ==
-    filename: (req, file, cb) => {
-        const uniqueSuffix = uuidv4();
-        const extension = path.extname(file.originalname);
-        // === LA BONNE LIGNE ===
-        cb(null, `${uniqueSuffix}${extension}`);
-        // =======================
-      }
-    // == FIN CORRECTION ==
-  });
-  
-  // ... (le reste de la configuration multer et du fichier server.js) ...
-// Filtre pour n'accepter que les images
-const imageFileFilter = (req, file, cb) => {
-  if (file.mimetype.startsWith("image/")) {
-    cb(null, true); // Accepter
-  } else {
-    cb(
-      new Error("Type de fichier non autorisé ! Veuillez uploader une image."),
-      false
-    ); // Refuser
-  }
-};
-
-// Initialiser multer avec la configuration
-const uploadImage = multer({
-  storage: imageStorage,
-  fileFilter: imageFileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 }, // Limite de 5MB par image
-});
-// --- Middleware ---
-app.use(cors()); // Autoriser les requêtes depuis Angular (qui tourne sur un autre port)
-app.use(express.json()); // Pour parser les corps de requête JSON (POST, PUT)
-app.use("/uploads", express.static(uploadsBasePath));
-
-// --- Fonctions Utilitaires (Async/Await) ---
-
-// Obtient le chemin du dossier pour une catégorie/sous-catégorie
-function getRecipeFolderPath(category, subcategory) {
-  if (subcategory && subcategory !== "") {
-    return path.join(recipesBasePath, category, subcategory);
-  } else {
-    return path.join(recipesBasePath, category);
-  }
+// ========================================================================
+// ACTION REQUISE : Mettez le chemin correct vers votre clé Firebase ici !
+const serviceAccountPath = '/etc/secrets/service-account-key.json';
+let serviceAccount;
+try {
+    serviceAccount = require(serviceAccountPath);
+} catch(e) {
+    console.error(`FATAL ERROR: Could not load Firebase secret file from ${serviceAccountPath}. Ensure the Secret File is configured correctly in Render and the path matches.`);
+    console.error(e);
+    process.exit(1); // Arrêter si la clé ne peut pas être chargée
 }
 
-// Obtient le chemin complet d'un fichier recette
-function getRecipeFilePath(category, subcategory, recipeId) {
-  const folderPath = getRecipeFolderPath(category, subcategory);
-  // Assurer que l'ID a l'extension .json pour le nom de fichier
-  const filename = recipeId.endsWith(".json") ? recipeId : `${recipeId}.json`;
-  return path.join(folderPath, filename);
-}
+// ACTION REQUISE : Mettez le nom de votre bucket Storage Firebase ici !
+const firebaseStorageBucket = "recettes-63044.appspot.com";
+// ========================================================================
 
-// Obtient le chemin complet d'un fichier manifest
-function getManifestPath(category, subcategory) {
-  const folderPath = getRecipeFolderPath(category, subcategory);
-  return path.join(folderPath, "manifest.json");
-}
-
-// Lit un fichier JSON (manifeste ou recette)
-async function readJsonFile(filePath) {
-  try {
-    const data = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(data);
-  } catch (error) {
-    // Si le fichier n'existe pas (ENOENT), ce n'est pas forcément une erreur critique
-    if (error.code === "ENOENT") {
-      console.warn(`File not found: ${filePath}`);
-      return null; // Retourner null si le fichier n'existe pas
-    }
-    // Pour les autres erreurs (permissions, etc.), on lance l'erreur
-    console.error(`Error reading file ${filePath}:`, error);
-    throw error;
-  }
-}
-
-// Écrit des données dans un fichier JSON (manifeste ou recette)
-async function writeJsonFile(filePath, data) {
-  try {
-    const folder = path.dirname(filePath);
-    // Créer les dossiers parents si nécessaire
-    await fs.mkdir(folder, { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8"); // Indenté pour lisibilité
-  } catch (error) {
-    console.error(`Error writing file ${filePath}:`, error);
-    throw error;
-  }
-}
-
-// Supprime un fichier
-async function deleteFile(filePath) {
-  try {
-    await fs.unlink(filePath);
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      console.warn(`Attempted to delete non-existent file: ${filePath}`);
-      // Ce n'est peut-être pas une erreur fatale si on essaie de supprimer qqch qui n'est plus là
-    } else {
-      console.error(`Error deleting file ${filePath}:`, error);
-      throw error;
-    }
-  }
-}
-
-// --- Routes de l'API ---
-
-// GET /api/recipes - Récupérer TOUTES les recettes
-// Note : C'est simple mais peut devenir lent si beaucoup de fichiers.
-
-app.post(
-  "/api/upload/image",
-  uploadImage.single("recipeImage"),
-  (req, res) => {
-    console.log("POST /api/upload/image reçu");
-    if (!req.file) {
-      console.error("Aucun fichier reçu ou type de fichier invalide.");
-      return res
-        .status(400)
-        .json({ message: "Aucun fichier image reçu ou type invalide." });
-    }
-    console.log("Fichier uploadé avec succès:", req.file);
-    // Construire l'URL relative où l'image sera accessible
-    const imageUrl = `/uploads/images/${req.file.filename}`;
-    // Renvoyer l'URL de l'image au frontend
-    res.status(200).json({ imageUrl: imageUrl });
-  },
-  (error, req, res, next) => {
-    // Gestionnaire d'erreurs spécifique pour Multer
-    console.error("Erreur pendant l'upload d'image:", error.message);
-    if (error instanceof multer.MulterError) {
-      // Erreur connue de Multer (ex: taille limite dépassée)
-      return res
-        .status(400)
-        .json({ message: `Erreur Multer: ${error.message}` });
-    } else if (error.message.includes("Type de fichier non autorisé")) {
-      return res.status(400).json({ message: error.message });
-    }
-    // Autre erreur
-    res.status(500).json({ message: error.message || "Échec de l'upload." });
-  }
-);
-
-app.get("/api/recipes", async (req, res) => {
-  console.log("GET /api/recipes received");
-  let allRecipes = [];
-  try {
-    const categories = await fs.readdir(recipesBasePath, {
-      withFileTypes: true,
+try {
+    admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+        storageBucket: firebaseStorageBucket
     });
+    console.log("Firebase Admin SDK Initialized.");
+} catch (error) {
+    console.error("Error initializing Firebase Admin SDK:", error);
+    process.exit(1);
+}
 
-    for (const categoryDir of categories) {
-      if (categoryDir.isDirectory()) {
-        const categoryPath = path.join(recipesBasePath, categoryDir.name);
-        const categoryItems = await fs.readdir(categoryPath, {
-          withFileTypes: true,
+// Obtenir une référence à Firestore et Storage
+const db = admin.firestore();
+const bucket = admin.storage().bucket();
+// --- Fin Initialisation Firebase ---
+
+// --- Middleware ---
+app.use(cors());
+app.use(express.json());
+
+const memoryStorage = multer.memoryStorage();
+const upload = multer({
+    storage: memoryStorage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith("image/")) {
+            cb(null, true);
+        } else {
+            cb(new Error("Type de fichier non autorisé ! Veuillez uploader une image."), false);
+        }
+    },
+});
+// --- Fin Middleware ---
+
+// --- Routes API ---
+
+// POST /api/upload/image
+app.post(
+    "/api/upload/image",
+    upload.single("recipeImage"),
+    async (req, res) => {
+        console.log("POST /api/upload/image received");
+        if (!req.file) {
+            console.log("Upload attempt failed: No file provided.");
+            return res.status(400).json({ message: "Aucun fichier image fourni." });
+        }
+        if (!bucket) {
+             console.error("Firebase Storage bucket is not initialized.");
+             return res.status(500).json({ message: "Erreur serveur: Storage non initialisé." });
+        }
+        console.log(`File received: ${req.file.originalname}, size: ${req.file.size}, mimetype: ${req.file.mimetype}`);
+
+        const uniqueFilename = `${uuidv4()}${path.extname(req.file.originalname)}`;
+        const fileUpload = bucket.file(uniqueFilename);
+        const blobStream = fileUpload.createWriteStream({
+            metadata: { contentType: req.file.mimetype },
         });
 
-        let hasSubcategories = categoryItems.some((item) => item.isDirectory());
+        blobStream.on("error", (error) => {
+            console.error("Error uploading to Firebase Storage:", error);
+            res.status(500).json({ message: "Erreur lors de l'upload de l'image vers le cloud." });
+        });
 
-        if (hasSubcategories) {
-          // Traiter les sous-catégories
-          for (const subcategoryDir of categoryItems) {
-            if (subcategoryDir.isDirectory()) {
-              const manifestPath = getManifestPath(
-                categoryDir.name,
-                subcategoryDir.name
-              );
-              const manifest = (await readJsonFile(manifestPath)) || [];
-              for (const entry of manifest) {
-                const recipePath = getRecipeFilePath(
-                  categoryDir.name,
-                  subcategoryDir.name,
-                  entry.id
-                );
-                const recipe = await readJsonFile(recipePath);
-                if (recipe) allRecipes.push(recipe);
-              }
+        blobStream.on("finish", async () => {
+            try {
+                await fileUpload.makePublic(); // Rend le fichier public
+                const publicUrl = `https://storage.googleapis.com/${bucket.name}/${uniqueFilename}`;
+                console.log(`Image uploaded successfully to Firebase Storage: ${publicUrl}`);
+                res.status(200).json({ imageUrl: publicUrl });
+            } catch (error) {
+                console.error("Error making file public or getting URL:", error);
+                res.status(500).json({ message: "Erreur serveur lors de la finalisation de l'upload." });
             }
-          }
-        } else {
-          // Traiter la catégorie simple (pas de sous-dossiers)
-          const manifestPath = getManifestPath(categoryDir.name, "");
-          const manifest = (await readJsonFile(manifestPath)) || [];
-          for (const entry of manifest) {
-            const recipePath = getRecipeFilePath(
-              categoryDir.name,
-              "",
-              entry.id
-            );
-            const recipe = await readJsonFile(recipePath);
-            if (recipe) allRecipes.push(recipe);
-          }
-        }
-      }
+        });
+        blobStream.end(req.file.buffer);
     }
-    console.log(`GET /api/recipes - Returning ${allRecipes.length} recipes.`);
-    res.json(allRecipes);
-  } catch (error) {
-    console.error("Error getting all recipes:", error);
-    res.status(500).json({
-      message: "Erreur serveur lors de la récupération des recettes.",
-    });
-  }
+);
+
+// GET /api/recipes
+app.get("/api/recipes", async (req, res) => {
+    console.log("GET /api/recipes received - fetching from Firestore");
+    try {
+        // Optionnel: Trier les recettes par date de création la plus récente
+        const recipesSnapshot = await db.collection("recipes").orderBy("createdAt", "desc").get();
+        const recipes = [];
+        recipesSnapshot.forEach((doc) => {
+            recipes.push({ id: doc.id, ...doc.data() });
+        });
+        console.log(`GET /api/recipes - Returning ${recipes.length} recipes from Firestore.`);
+        res.json(recipes);
+    } catch (error) {
+        console.error("Error getting recipes from Firestore:", error);
+        res.status(500).json({ message: "Erreur serveur lors de la récupération des recettes." });
+    }
 });
 
-// POST /api/recipes - Créer une nouvelle recette
+// POST /api/recipes
 app.post("/api/recipes", async (req, res) => {
-  const newRecipeData = req.body;
-  console.log("POST /api/recipes received with data:", newRecipeData);
+    const rawRecipeData = req.body; // Données brutes reçues
+    console.log("POST /api/recipes received with data:", rawRecipeData);
 
-  if (!newRecipeData || !newRecipeData.title || !newRecipeData.category) {
-    return res.status(400).json({
-      message: "Données de recette invalides (titre et catégorie requis).",
-    });
-  }
-
-  // Générer un ID unique
-  const newId =
-    newRecipeData.title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/(^-|-$)/g, "") +
-    "-" +
-    uuidv4().substring(0, 8);
-  newRecipeData.id = newId; // Ajouter l'ID généré
-
-  const category = newRecipeData.category;
-  const subcategory = newRecipeData.subcategory || ""; // Peut être vide
-  const recipeFilePath = getRecipeFilePath(category, subcategory, newId);
-  const manifestPath = getManifestPath(category, subcategory);
-
-  try {
-    // 1. Écrire le fichier de la nouvelle recette
-    await writeJsonFile(recipeFilePath, newRecipeData);
-    console.log(`Recipe file created: ${recipeFilePath}`);
-
-    // 2. Mettre à jour le manifest.json
-    let manifest = (await readJsonFile(manifestPath)) || [];
-    // S'assurer que le manifest est bien un tableau
-    if (!Array.isArray(manifest)) {
-      console.warn(
-        `Manifest ${manifestPath} was not an array. Resetting to empty array.`
-      );
-      manifest = [];
+    if (!rawRecipeData || !rawRecipeData.title || !rawRecipeData.category) {
+        return res.status(400).json({ message: "Données de recette invalides (titre et catégorie requis)." });
     }
-    // Ajouter la nouvelle entrée (juste l'ID est suffisant ici)
-    manifest.push({ id: newId });
-    await writeJsonFile(manifestPath, manifest);
-    console.log(`Manifest file updated: ${manifestPath}`);
+    if (rawRecipeData.imageUrl && !rawRecipeData.imageUrl.startsWith('https://storage.googleapis.com/')) {
+       console.warn("Recipe has an imageUrl but it doesn't seem to be a Firebase Storage URL.");
+       // Selon votre logique, vous pourriez vouloir la rejeter ou la supprimer
+       // delete rawRecipeData.imageUrl;
+    }
 
-    // Renvoyer la recette créée avec son ID
-    res.status(201).json(newRecipeData);
-  } catch (error) {
-    console.error("Error creating recipe:", error);
-    // Essayer de supprimer le fichier recette si l'écriture du manifest a échoué
-    await deleteFile(recipeFilePath).catch((delErr) =>
-      console.error("Cleanup failed:", delErr)
-    );
-    res
-      .status(500)
-      .json({ message: "Erreur serveur lors de la création de la recette." });
-  }
+    try {
+        // Préparer les données à insérer, incluant les timestamps serveur
+        const recipeDataToInsert = {
+            ...rawRecipeData, // Copie les champs existants
+            createdAt: FieldValue.serverTimestamp(), // Ajoute la date de création
+            updatedAt: FieldValue.serverTimestamp()  // Ajoute la date de mise à jour
+        };
+
+        const docRef = await db.collection("recipes").add(recipeDataToInsert);
+        console.log("Recipe added to Firestore with ID: ", docRef.id);
+
+        // Renvoyer la recette créée avec son ID (les timestamps seront des objets spéciaux avant d'être lus)
+        res.status(201).json({ id: docRef.id, ...recipeDataToInsert });
+    } catch (error) {
+        console.error("Error adding recipe to Firestore:", error);
+        res.status(500).json({ message: "Erreur serveur lors de la création de la recette." });
+    }
 });
 
-// PUT /api/recipes/:id - Mettre à jour une recette existante
+// PUT /api/recipes/:id
 app.put("/api/recipes/:id", async (req, res) => {
-  const recipeId = req.params.id;
-  const updatedRecipeData = req.body;
-  console.log(
-    `PUT /api/recipes/${recipeId} received with data:`,
-    updatedRecipeData
-  );
+    const recipeId = req.params.id;
+    const rawRecipeData = req.body; // Données brutes reçues
+    console.log(`PUT /api/recipes/${recipeId} received with data:`, rawRecipeData);
 
-  if (
-    !updatedRecipeData ||
-    !updatedRecipeData.category ||
-    updatedRecipeData.id !== recipeId
-  ) {
-    return res
-      .status(400)
-      .json({ message: "Données de recette invalides ou ID incohérent." });
-  }
-
-  const category = updatedRecipeData.category;
-  const subcategory = updatedRecipeData.subcategory || "";
-  const recipeFilePath = getRecipeFilePath(category, subcategory, recipeId);
-
-  try {
-    // Vérifier si le fichier original existe (optionnel mais bon pour un PUT)
-    // await fs.access(recipeFilePath); // Lance une erreur si n'existe pas
-
-    // Écrire/Écraser le fichier recette
-    await writeJsonFile(recipeFilePath, updatedRecipeData);
-    console.log(`Recipe file updated: ${recipeFilePath}`);
-
-    // Note: On ne met pas à jour le manifest ici car on suppose que
-    // la catégorie/sous-catégorie et l'ID ne changent pas.
-    // Si le titre changeait et que le manifest le contenait, il faudrait le mettre à jour.
-
-    res.status(200).json(updatedRecipeData); // Renvoyer la recette mise à jour
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      res.status(404).json({
-        message: `Recette non trouvée pour mise à jour (ID: ${recipeId})`,
-      });
-    } else {
-      console.error(`Error updating recipe ${recipeId}:`, error);
-      res.status(500).json({
-        message: "Erreur serveur lors de la mise à jour de la recette.",
-      });
+    if (!rawRecipeData || !rawRecipeData.category) {
+        return res.status(400).json({ message: "Données de recette invalides." });
     }
-  }
+
+    try {
+        const recipeRef = db.collection("recipes").doc(recipeId);
+        const doc = await recipeRef.get();
+        if (!doc.exists) {
+            return res.status(404).json({ message: `Recette non trouvée (ID: ${recipeId})` });
+        }
+
+        // Préparer les données à mettre à jour, incluant le timestamp
+        const recipeDataToUpdate = {
+             ...rawRecipeData, // Copie les champs reçus
+             updatedAt: FieldValue.serverTimestamp() // Met à jour la date de modification
+        };
+        // Supprimer 'createdAt' si présent dans le body pour éviter de l'écraser
+        delete recipeDataToUpdate.createdAt;
+
+        await recipeRef.update(recipeDataToUpdate);
+        console.log(`Recipe ${recipeId} updated in Firestore.`);
+
+        const updatedDoc = await recipeRef.get(); // Relire pour avoir les timestamps résolus
+        res.status(200).json({ id: updatedDoc.id, ...updatedDoc.data() });
+    } catch (error) {
+        console.error(`Error updating recipe ${recipeId} in Firestore:`, error);
+        res.status(500).json({ message: "Erreur serveur lors de la mise à jour de la recette." });
+    }
 });
 
-// DELETE /api/recipes/:id - Supprimer une recette
+// DELETE /api/recipes/:id
 app.delete("/api/recipes/:id", async (req, res) => {
-  const recipeId = req.params.id;
-  const { category, subcategory } = req.query;
-  console.log(`DELETE /api/recipes/${recipeId} reçu, query:`, req.query);
+    const recipeId = req.params.id;
+    console.log(`DELETE /api/recipes/${recipeId} received`);
 
-  if (!category) {
-    return res.status(400).json({ message: "Paramètre 'category' manquant." });
-  }
-  const subcat = subcategory || "";
-  const recipeFilePath = getRecipeFilePath(category, subcat, recipeId);
-  const manifestPath = getManifestPath(category, subcat);
+    try {
+        const recipeRef = db.collection("recipes").doc(recipeId);
+        const doc = await recipeRef.get();
+        if (!doc.exists) {
+            console.log(`Recipe ${recipeId} not found in Firestore for deletion.`);
+            return res.status(404).json({ message: `Recette non trouvée (ID: ${recipeId})` });
+        }
+        const recipeData = doc.data();
+        const imageUrlToDelete = recipeData.imageUrl;
 
-  try {
-    // 1. Lire les données de la recette AVANT de la supprimer pour obtenir l'URL de l'image
-    const recipeData = await readJsonFile(recipeFilePath);
-    let imageUrlToDelete = null;
-    if (
-      recipeData &&
-      recipeData.imageUrl &&
-      recipeData.imageUrl.startsWith("/uploads/images/")
-    ) {
-      // On ne supprime que les images qui sont dans notre dossier d'upload
-      imageUrlToDelete = recipeData.imageUrl;
+        // 1. Supprimer Firestore document
+        await recipeRef.delete();
+        console.log(`Recipe ${recipeId} deleted from Firestore.`);
+
+        // 2. Supprimer image de Storage
+        if (imageUrlToDelete && imageUrlToDelete.startsWith(`https://storage.googleapis.com/${bucket.name}/`)) {
+            try {
+                const urlParts = imageUrlToDelete.split('/');
+                // Le nom de fichier peut contenir des slashes s'il est dans un "dossier" virtuel
+                const filename = decodeURIComponent(urlParts.slice(4).join('/')); // Prend tout après /o/
+                if (filename) {
+                    const file = bucket.file(filename);
+                    await file.delete();
+                    console.log(`Associated image ${filename} deleted from Firebase Storage.`);
+                } else { console.warn(`Could not extract filename from URL: ${imageUrlToDelete}`); }
+            } catch (storageError) {
+                console.error(`Error deleting image ${imageUrlToDelete} from Firebase Storage (non-fatal):`, storageError);
+            }
+        } else { console.log(`Recipe ${recipeId} had no valid image URL to delete.`); }
+
+        res.status(204).send();
+    } catch (error) {
+        console.error(`Error deleting recipe ${recipeId}:`, error);
+        res.status(500).json({ message: "Erreur serveur lors de la suppression de la recette." });
     }
+});
 
-    // 2. Supprimer le fichier JSON de la recette
-    await deleteFile(recipeFilePath);
-    console.log(`Fichier recette supprimé: ${recipeFilePath}`);
+// ========================================================================
+// MODIFICATION IMPORTANTE ICI : GET /api/categories
+// Lecture depuis la collection 'categories' dédiée et tri par 'sortOrder'
+// ========================================================================
+app.get("/api/categories", async (req, res) => {
+    console.log("GET /api/categories received - fetching from 'categories' collection");
+    try {
+        const categoriesSnapshot = await db.collection('categories')
+                                          .orderBy('sortOrder', 'asc') // Trier par le champ sortOrder
+                                          .orderBy('name', 'asc') // Puis par nom en cas d'égalité de sortOrder
+                                          .get();
+        const categoriesResult = [];
+        categoriesSnapshot.forEach(doc => {
+            const data = doc.data();
+            // S'assurer que subcategories est un tableau, même s'il est absent ou null dans Firestore
+            const subcategories = Array.isArray(data.subcategories) ? data.subcategories : [];
+            // Trier les sous-catégories par nom
+             const sortedSubcategories = [...subcategories].sort((a, b) => a.name.localeCompare(b.name));
 
-    // 3. Supprimer le fichier image associé (s'il existe)
-    if (imageUrlToDelete) {
-      const imageFileName = path.basename(imageUrlToDelete); // Extrait le nom du fichier de l'URL
-      const imageFilePathToDelete = path.join(imagesUploadPath, imageFileName);
-      console.log(
-        `Tentative de suppression de l'image: ${imageFilePathToDelete}`
-      );
-      await deleteFile(imageFilePathToDelete); // Utilise notre helper qui gère ENOENT
+            categoriesResult.push({
+                 id: doc.id, // Inclure l'ID Firestore, nécessaire pour le frontend (gestion)
+                 name: data.name,
+                 subcategories: sortedSubcategories,
+                 // sortOrder: data.sortOrder // Inclure si le frontend en a besoin
+             });
+        });
+
+        console.log(`GET /api/categories - Returning ${categoriesResult.length} categories from collection.`);
+        res.json(categoriesResult);
+
+    } catch (error) {
+        console.error("Error getting categories from Firestore collection:", error);
+        res.status(500).json({ message: "Erreur serveur lors de la récupération des catégories." });
     }
+});
+// ========================================================================
+// FIN MODIFICATION GET /api/categories
+// ========================================================================
 
-    // 4. Mettre à jour le manifest
-    let manifest = await readJsonFile(manifestPath);
-    if (Array.isArray(manifest)) {
-      const initialLength = manifest.length;
-      manifest = manifest.filter((entry) => entry.id !== recipeId);
-      if (manifest.length < initialLength) {
-        await writeJsonFile(manifestPath, manifest);
-        console.log(
-          `Manifest mis à jour (supprimé ${recipeId}): ${manifestPath}`
-        );
-      } else {
-        console.warn(
-          `ID ${recipeId} non trouvé dans manifest ${manifestPath}.`
-        );
-      }
-    } else {
-      console.warn(`Manifest ${manifestPath} non trouvé ou invalide.`);
+
+// --- Routes pour la GESTION des catégories (POST/DELETE) ---
+// Ces routes fonctionnent avec la collection 'categories'
+
+// POST /api/categories
+app.post("/api/categories", async (req, res) => {
+    console.log("POST /api/categories received", req.body);
+    const categoryName = req.body.name ? req.body.name.trim() : null;
+    if (!categoryName) { return res.status(400).json({ message: "Le nom de la catégorie est requis." }); }
+
+    try {
+        const existingQuery = await db.collection('categories').where('name', '==', categoryName).limit(1).get();
+        if (!existingQuery.empty) { return res.status(409).json({ message: `La catégorie '${categoryName}' existe déjà.` }); }
+
+        const newCategoryData = {
+            name: categoryName,
+            subcategories: [],
+            sortOrder: 999 // Mettre à jour manuellement via la console si nécessaire
+        };
+        const docRef = await db.collection('categories').add(newCategoryData);
+        console.log(`Category '${categoryName}' created with ID: ${docRef.id}`);
+        res.status(201).json({ id: docRef.id, ...newCategoryData });
+    } catch (error) {
+        console.error(`Error creating category '${categoryName}':`, error);
+        res.status(500).json({ message: "Erreur serveur lors de la création de la catégorie." });
     }
+});
 
-    res.status(204).send(); // Succès sans contenu
-  } catch (error) {
-    console.error(
-      `Erreur lors de la suppression de la recette ${recipeId}:`,
-      error
-    );
-    res.status(500).json({ message: "Erreur serveur lors de la suppression." });
-  }
+// DELETE /api/categories/:id
+app.delete("/api/categories/:id", async (req, res) => {
+    const categoryId = req.params.id;
+    console.log(`DELETE /api/categories/${categoryId} received`);
+    if (!categoryId) { return res.status(400).json({ message: "L'ID de la catégorie est requis." }); }
+
+    try {
+        const categoryRef = db.collection('categories').doc(categoryId);
+        const categoryDoc = await categoryRef.get();
+        if (!categoryDoc.exists) { return res.status(404).json({ message: `Catégorie non trouvée (ID: ${categoryId})` }); }
+        const categoryName = categoryDoc.data().name;
+
+        const recipesQuery = await db.collection('recipes').where('category', '==', categoryName).limit(1).get();
+        if (!recipesQuery.empty) {
+            console.warn(`Attempted to delete category '${categoryName}' (ID: ${categoryId}) which is still in use by recipes.`);
+            return res.status(409).json({ message: `Impossible de supprimer la catégorie '${categoryName}' car elle est utilisée par des recettes existantes.` });
+        }
+
+        await categoryRef.delete();
+        console.log(`Category '${categoryName}' (ID: ${categoryId}) deleted successfully.`);
+        res.status(204).send();
+    } catch (error) {
+        console.error(`Error deleting category ID ${categoryId}:`, error);
+        res.status(500).json({ message: "Erreur serveur lors de la suppression de la catégorie." });
+    }
+});
+
+// POST /api/categories/:id/subcategories
+app.post("/api/categories/:id/subcategories", async (req, res) => {
+    const categoryId = req.params.id;
+    const subcategoryName = req.body.name ? req.body.name.trim() : null;
+    console.log(`POST /api/categories/${categoryId}/subcategories received`, req.body);
+    if (!categoryId) { return res.status(400).json({ message: "L'ID de la catégorie parente est requis." }); }
+    if (!subcategoryName) { return res.status(400).json({ message: "Le nom de la sous-catégorie est requis." }); }
+
+    try {
+        const categoryRef = db.collection('categories').doc(categoryId);
+        const categoryDoc = await categoryRef.get();
+        if (!categoryDoc.exists) { return res.status(404).json({ message: `Catégorie parente non trouvée (ID: ${categoryId})` }); }
+
+        const currentSubcategories = categoryDoc.data().subcategories || [];
+        const alreadyExists = currentSubcategories.some(sub => sub.name === subcategoryName);
+        if (alreadyExists) { return res.status(409).json({ message: `La sous-catégorie '${subcategoryName}' existe déjà dans cette catégorie.` }); }
+
+        await categoryRef.update({ subcategories: FieldValue.arrayUnion({ name: subcategoryName }) });
+        console.log(`Subcategory '${subcategoryName}' added to category ID ${categoryId}`);
+        res.status(201).json({ message: `Sous-catégorie '${subcategoryName}' ajoutée avec succès.` });
+    } catch (error) {
+        console.error(`Error adding subcategory to category ID ${categoryId}:`, error);
+        res.status(500).json({ message: "Erreur serveur lors de l'ajout de la sous-catégorie." });
+    }
+});
+
+// DELETE /api/categories/:id/subcategories/:name
+app.delete("/api/categories/:id/subcategories/:name", async (req, res) => {
+    const categoryId = req.params.id;
+    const subcategoryName = req.params.name ? decodeURIComponent(req.params.name) : null;
+    console.log(`DELETE /api/categories/${categoryId}/subcategories/${subcategoryName} received`);
+    if (!categoryId) { return res.status(400).json({ message: "L'ID de la catégorie parente est requis." }); }
+    if (!subcategoryName) { return res.status(400).json({ message: "Le nom de la sous-catégorie est requis." }); }
+
+    try {
+        const categoryRef = db.collection('categories').doc(categoryId);
+        const categoryDoc = await categoryRef.get();
+        if (!categoryDoc.exists) { return res.status(404).json({ message: `Catégorie parente non trouvée (ID: ${categoryId})` }); }
+        const categoryName = categoryDoc.data().name;
+
+        const recipesQuery = await db.collection('recipes')
+                                    .where('category', '==', categoryName)
+                                    .where('subcategory', '==', subcategoryName)
+                                    .limit(1).get();
+        if (!recipesQuery.empty) {
+            console.warn(`Attempted to delete subcategory '${subcategoryName}' from category '${categoryName}' (ID: ${categoryId}) which is still in use by recipes.`);
+            return res.status(409).json({ message: `Impossible de supprimer la sous-catégorie '${subcategoryName}' car elle est utilisée par des recettes existantes.` });
+        }
+
+        await categoryRef.update({ subcategories: FieldValue.arrayRemove({ name: subcategoryName }) });
+        console.log(`Subcategory '${subcategoryName}' removed from category ID ${categoryId}`);
+        res.status(204).send();
+    } catch (error) {
+        console.error(`Error deleting subcategory '${subcategoryName}' from category ID ${categoryId}:`, error);
+        res.status(500).json({ message: "Erreur serveur lors de la suppression de la sous-catégorie." });
+    }
+});
+
+
+// --- Gestionnaire d'erreurs générique ---
+app.use((err, req, res, next) => {
+    console.error("Unhandled error:", err.stack || err.message || err);
+    res.status(500).json({ message: 'Une erreur interne est survenue.' });
 });
 
 // --- Démarrage du serveur ---
-// En bas de server.js
-const PORT = process.env.PORT || 3000; // Utilise le port de l'env ou 3000 par défaut
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+    console.log(`Server listening on port ${PORT}`);
+    console.log("----------------------------------------------------");
+    console.log(`Using Storage Bucket: ${firebaseStorageBucket}`);
+    console.log("----------------------------------------------------");
 });

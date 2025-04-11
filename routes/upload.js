@@ -1,58 +1,53 @@
-const express = require("express");
-const path = require("path");
-const { v4: uuidv4 } = require("uuid");
-const { bucket } = require("../config/firebase");
-const upload = require("../config/multer"); // Middleware multer configuré
-const adminAuthMiddleware = require("../middleware/authMiddleware");
-
+// Exemple avec Express et multer (adaptez selon votre configuration)
+const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const cloudinary = require('cloudinary').v2;
+const streamifier = require('streamifier'); // Pour uploader depuis un buffer
 
-// POST /api/upload/image (protégé par l'authentification admin)
-router.post(
-  "/image",
-  adminAuthMiddleware,
-  upload.single("recipeImage"), // Utilise l'instance multer importée
-  async (req, res) => {
-    console.log("POST /api/upload/image received");
-    if (!req.file) {
-      console.log("Upload attempt failed: No file provided.");
-      return res.status(400).json({ message: "Aucun fichier image fourni." });
-    }
-    // 'bucket' est déjà vérifié lors de l'initialisation dans firebase.js
-    console.log(
-      `File received: ${req.file.originalname}, size: ${req.file.size}, mimetype: ${req.file.mimetype}`
-    );
+// Configurez multer pour utiliser la mémoire (buffer)
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
-    const uniqueFilename = `${uuidv4()}${path.extname(req.file.originalname)}`;
-    const fileUpload = bucket.file(uniqueFilename);
-    const blobStream = fileUpload.createWriteStream({
-      metadata: { contentType: req.file.mimetype },
-    });
-
-    blobStream.on("error", (error) => {
-      console.error("Error uploading to Firebase Storage:", error);
-      res
-        .status(500)
-        .json({ message: "Erreur lors de l'upload de l'image vers le cloud." });
-    });
-
-    blobStream.on("finish", async () => {
-      try {
-        await fileUpload.makePublic(); // Rend le fichier public
-        const publicUrl = `https://storage.googleapis.com/${bucket.name}/${uniqueFilename}`;
-        console.log(
-          `Image uploaded successfully to Firebase Storage: ${publicUrl}`
-        );
-        res.status(200).json({ imageUrl: publicUrl });
-      } catch (error) {
-        console.error("Error making file public or getting URL:", error);
-        res.status(500).json({
-          message: "Erreur serveur lors de la finalisation de l'upload.",
-        });
-      }
-    });
-    blobStream.end(req.file.buffer);
+// La route POST /api/upload/image
+router.post('/image', upload.single('recipeImage'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ message: 'Aucun fichier image fourni.' });
   }
-);
 
-module.exports = router;
+  console.log('[API Upload] Received image:', req.file.originalname);
+
+  // Fonction pour uploader le buffer vers Cloudinary
+  let upload_stream = (buffer) => {
+      return new Promise((resolve, reject) => {
+          let stream = cloudinary.uploader.upload_stream(
+              {
+                  folder: "recettes", // Optionnel: organise les images dans un dossier Cloudinary
+                  // public_id: 'un_id_unique_si_besoin', // Optionnel: Cloudinary génère un ID unique par défaut
+                  // resource_type: "auto" // Détection automatique du type
+              },
+              (error, result) => {
+                  if (result) {
+                      console.log('[Cloudinary] Upload successful:', result.secure_url);
+                      resolve(result);
+                  } else {
+                      console.error('[Cloudinary] Upload error:', error);
+                      reject(error);
+                  }
+              }
+          );
+         streamifier.createReadStream(buffer).pipe(stream);
+      });
+  };
+
+  try {
+      const result = await upload_stream(req.file.buffer);
+      // Renvoyer l'URL sécurisée fournie par Cloudinary
+      res.status(200).json({ imageUrl: result.secure_url });
+  } catch (error) {
+      console.error("Error uploading to Cloudinary:", error);
+      res.status(500).json({ message: 'Erreur lors de l\'upload vers Cloudinary.' });
+  }
+});
+
+module.exports = router; // Ou comment vous exportez vos routes
